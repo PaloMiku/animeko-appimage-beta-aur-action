@@ -91,6 +91,10 @@ jobs:
           echo "NEW_PKGVER_SED=$NEW_PKGVER_SED"
           echo "DOWNLOAD_URL=$DOWNLOAD_URL"
 
+          if [ -z "$NEW_PKGVER" ]; then
+            echo "ERROR: NEW_PKGVER was empty. latest_tag=$LATEST_TAG"
+            exit 1
+          fi
           if [ -z "$DOWNLOAD_URL" ]; then
             echo "No release asset URL available."
             exit 1
