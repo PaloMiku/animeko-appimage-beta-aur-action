@@ -4,7 +4,9 @@
 pkgname=animeko-appimage-beta
 _pkgname=animeko
 pkgver="5.2.0"
-_pkgver=$(sed -E 's/(alpha|beta)/-\1/' <<<"$pkgver")
+# normalize alpha/beta into dash-separated style for upstream URL path
+# 5.4.0beta05 -> 5.4.0-beta05, 5.4.0-beta05 -> 5.4.0-beta05
+_pkgver=$(sed -E 's/(alpha|beta)/-\1/g; s/-{2,}/-/g' <<<"$pkgver")
 pkgrel=1
 pkgdesc='集找番、追番、看番的一站式弹幕追番平台'
 arch=('x86_64')

@@ -63,7 +63,7 @@ jobs:
         run: |
           NEW_VERSION="$LATEST_TAG"
           NEW_PKGVER=$(echo "$NEW_VERSION" | sed 's/^v//')
-          NEW_PKGVER_SED=$(echo "$NEW_PKGVER" | sed -E 's/(alpha|beta)/-\\1/')
+          NEW_PKGVER_SED=$(echo "$NEW_PKGVER" | sed -E 's/(alpha|beta)/-\\1/g; s/-{2,}/-/g')
 
           sed -i -E "s/^pkgver=.*/pkgver=\"${NEW_PKGVER}\"/" PKGBUILD
           sed -i -E "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
