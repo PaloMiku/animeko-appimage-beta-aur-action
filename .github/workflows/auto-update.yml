@@ -1,0 +1,94 @@
+name: Auto Update AUR Package
+
+on:
+  schedule:
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+
+jobs:
+  update-aur:
+    runs-on: ubuntu-latest
+    env:
+      API_URL: "https://api.github.com/repos/open-ani/animeko/releases/latest"
+
+    steps:
+      - name: Checkout AUR Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get Latest Release Version from Upstream
+        id: get_release
+        run: |
+          LATEST_TAG=$(curl -sS "$API_URL" | jq -r '.tag_name')
+          if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" = "null" ]; then
+            echo "Failed to find latest tag."
+            exit 1
+          fi
+          echo "Latest release tag: $LATEST_TAG"
+          echo "latest_tag=$LATEST_TAG" >> $GITHUB_ENV
+
+      - name: Extract Current pkgver from PKGBUILD
+        id: get_pkgver
+        run: |
+          CURRENT_PKGVER=$(grep -oP '^pkgver=\\K.*' PKGBUILD | tr -d '"')
+          echo "Current pkgver in PKGBUILD: $CURRENT_PKGVER"
+          echo "current_pkgver=$CURRENT_PKGVER" >> $GITHUB_ENV
+
+      - name: Check if Update is Needed
+        id: check_update
+        run: |
+          if [ "$LATEST_TAG" = "$CURRENT_PKGVER" ]; then
+            echo "No update required."
+            echo "update_needed=false" >> $GITHUB_ENV
+            echo "update_needed=false" >> $GITHUB_OUTPUT
+          else
+            echo "Update required: new version $LATEST_TAG found (current: $CURRENT_PKGVER)"
+            echo "update_needed=true" >> $GITHUB_ENV
+            echo "update_needed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update PKGBUILD and .SRCINFO if New Version Found
+        if: steps.check_update.outputs.update_needed == 'true'
+        run: |
+          NEW_VERSION="$LATEST_TAG"
+          NEW_PKGVER=$(echo "$NEW_VERSION" | sed 's/^v//')
+          NEW_PKGVER_SED=$(echo "$NEW_PKGVER" | sed -E 's/(alpha|beta)/-\\1/')
+
+          sed -i -E "s/^pkgver=.*/pkgver=\"${NEW_PKGVER}\"/" PKGBUILD
+          sed -i -E "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+          sed -i -E "s|^source_x86_64=.*|source_x86_64=(\"https://d.myani.org/v${NEW_PKGVER_SED}/ani-${NEW_PKGVER_SED}-linux-x86_64.appimage\")|" PKGBUILD
+
+          curl -fSL -o ani.appimage "https://d.myani.org/v${NEW_PKGVER_SED}/ani-${NEW_PKGVER_SED}-linux-x86_64.appimage"
+          SHA512=$(sha512sum ani.appimage | awk '{print $1}')
+          sed -i -E "s|^sha512sums_x86_64=.*|sha512sums_x86_64=('${SHA512}')|" PKGBUILD
+
+          sed -i -E "s/^pkgver = .*/pkgver = ${NEW_PKGVER}/" .SRCINFO
+          sed -i -E "s/^pkgrel = .*/pkgrel = 1/" .SRCINFO
+          sed -i -E "s|^source_x86_64 = .*|source_x86_64 = https://d.myani.org/v${NEW_PKGVER_SED}/ani-${NEW_PKGVER_SED}-linux-x86_64.appimage|" .SRCINFO
+          sed -i -E "s|^sha512sums_x86_64 = .*|sha512sums_x86_64 = ${SHA512}|" .SRCINFO
+
+      - name: Commit updated PKGBUILD to repository
+        if: steps.check_update.outputs.update_needed == 'true'
+        run: |
+          git config user.name 'PaloMiku'
+          git config user.email 'palomiku@outlook.com'
+          git add PKGBUILD .SRCINFO
+          if ! git diff --cached --quiet; then
+            git commit -m "Update PKGBUILD to $LATEST_TAG"
+            git push origin HEAD:${{ github.ref }}
+          else
+            echo "No changes to commit."
+          fi
+
+      - name: Publish AUR package
+        if: steps.check_update.outputs.update_needed == 'true'
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        with:
+          pkgname: animeko-appimage-beta
+          pkgbuild: ./PKGBUILD
+          commit_username: 'PaloMiku'
+          commit_email: 'palomiku@outlook.com'
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "Update to $LATEST_TAG"
+          ssh_keyscan_types: rsa,ecdsa,ed25519
