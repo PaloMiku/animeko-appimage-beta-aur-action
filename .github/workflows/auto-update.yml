@@ -9,7 +9,7 @@ jobs:
   update-aur:
     runs-on: ubuntu-latest
     env:
-      API_URL: "https://api.github.com/repos/open-ani/animeko/releases/latest"
+      API_URL: "https://api.github.com/repos/open-ani/animeko/releases?per_page=100"
 
     steps:
       - name: Checkout AUR Repository
@@ -17,16 +17,20 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get Latest Release Version from Upstream
+      - name: Get Latest Beta Release Version from Upstream
         id: get_release
         run: |
-          LATEST_TAG=$(curl -sS "$API_URL" | jq -r '.tag_name')
-          if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" = "null" ]; then
-            echo "Failed to find latest tag."
+          # Prefer prerelease beta tags, fallback to any beta tag if none are marked prerelease
+          BETA_TAG=$(curl -sS -H "Accept: application/vnd.github+json" "$API_URL" | jq -r 'map(select(.prerelease == true and (.tag_name|test("beta";"i")))) | first?.tag_name // ""')
+          if [ -z "$BETA_TAG" ]; then
+            BETA_TAG=$(curl -sS -H "Accept: application/vnd.github+json" "$API_URL" | jq -r 'map(select((.tag_name|test("beta";"i")))) | first?.tag_name // ""')
+          fi
+          if [ -z "$BETA_TAG" ]; then
+            echo "Failed to find beta tag from releases."
             exit 1
           fi
-          echo "Latest release tag: $LATEST_TAG"
-          echo "latest_tag=$LATEST_TAG" >> $GITHUB_ENV
+          echo "Latest beta release tag: $BETA_TAG"
+          echo "latest_tag=$BETA_TAG" >> $GITHUB_ENV
 
       - name: Extract Current pkgver from PKGBUILD
         id: get_pkgver
