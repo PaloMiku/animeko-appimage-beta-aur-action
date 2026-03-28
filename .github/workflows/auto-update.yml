@@ -21,16 +21,29 @@ jobs:
         id: get_release
         run: |
           # Prefer prerelease beta tags, fallback to any beta tag if none are marked prerelease
-          BETA_TAG=$(curl -sS -H "Accept: application/vnd.github+json" "$API_URL" | jq -r '[.[] | select(.prerelease == true and (.tag_name | test("beta"; "i")))] | .[0].tag_name // ""')
+          RELEASES_JSON=$(curl -sS -H "Accept: application/vnd.github+json" "$API_URL")
+          BETA_TAG=$(echo "$RELEASES_JSON" | jq -r '[.[] | select(.prerelease == true and (.tag_name | test("beta"; "i")))] | .[0].tag_name // ""')
           if [ -z "$BETA_TAG" ]; then
-            BETA_TAG=$(curl -sS -H "Accept: application/vnd.github+json" "$API_URL" | jq -r '[.[] | select(.tag_name | test("beta"; "i"))] | .[0].tag_name // ""')
+            BETA_TAG=$(echo "$RELEASES_JSON" | jq -r '[.[] | select(.tag_name | test("beta"; "i"))] | .[0].tag_name // ""')
           fi
           if [ -z "$BETA_TAG" ]; then
             echo "Failed to find beta tag from releases."
             exit 1
           fi
+
+          # Get the release info for that tag to find asset URL
+          RELEASE_INFO=$(curl -sS -H "Accept: application/vnd.github+json" "https://api.github.com/repos/open-ani/animeko/releases/tags/$BETA_TAG")
+          ASSET_URL=$(echo "$RELEASE_INFO" | jq -r '.assets | map(select(.name | test("linux.*x86_64\\.appimage"; "i"))) | .[0].browser_download_url // ""')
+          if [ -z "$ASSET_URL" ]; then
+            echo "Failed to find beta appimage asset URL for tag $BETA_TAG." 
+            echo "release info: $RELEASE_INFO"
+            exit 1
+          fi
+
           echo "Latest beta release tag: $BETA_TAG"
+          echo "Asset URL: $ASSET_URL"
           echo "latest_tag=$BETA_TAG" >> $GITHUB_ENV
+          echo "latest_asset_url=$ASSET_URL" >> $GITHUB_ENV
 
       - name: Extract Current pkgver from PKGBUILD
         id: get_pkgver
@@ -63,19 +76,30 @@ jobs:
         run: |
           NEW_VERSION="$LATEST_TAG"
           NEW_PKGVER=$(echo "$NEW_VERSION" | sed 's/^v//')
-          NEW_PKGVER_SED=$(echo "$NEW_PKGVER" | sed -E 's/(alpha|beta)/-\\1/g; s/-{2,}/-/g')
+          NEW_PKGVER_SED=$(echo "$NEW_PKGVER" | sed -E 's/(alpha|beta)/-\1/g; s/-{2,}/-/g')
+
+          echo "NEW_PKGVER=$NEW_PKGVER"
+          echo "NEW_PKGVER_SED=$NEW_PKGVER_SED"
+          echo "LATEST_ASSET_URL=$latest_asset_url"
+
+          DOWNLOAD_URL="$latest_asset_url"
+          if [ -z "$DOWNLOAD_URL" ]; then
+            echo "No release asset URL available."
+            exit 1
+          fi
 
           sed -i -E "s/^pkgver=.*/pkgver=\"${NEW_PKGVER}\"/" PKGBUILD
           sed -i -E "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
-          sed -i -E "s|^source_x86_64=.*|source_x86_64=(\"https://d.myani.org/v${NEW_PKGVER_SED}/ani-${NEW_PKGVER_SED}-linux-x86_64.appimage\")|" PKGBUILD
+          sed -i -E "s|^source_x86_64=.*|source_x86_64=(\"${DOWNLOAD_URL}\")|" PKGBUILD
 
-          curl -fSL -o ani.appimage "https://d.myani.org/v${NEW_PKGVER_SED}/ani-${NEW_PKGVER_SED}-linux-x86_64.appimage"
+          curl -I -fS "$DOWNLOAD_URL" || { echo "Asset URL not found: $DOWNLOAD_URL"; exit 1; }
+          curl -fSL -o ani.appimage "$DOWNLOAD_URL"
           SHA512=$(sha512sum ani.appimage | awk '{print $1}')
           sed -i -E "s|^sha512sums_x86_64=.*|sha512sums_x86_64=('${SHA512}')|" PKGBUILD
 
           sed -i -E "s/^pkgver = .*/pkgver = ${NEW_PKGVER}/" .SRCINFO
           sed -i -E "s/^pkgrel = .*/pkgrel = 1/" .SRCINFO
-          sed -i -E "s|^source_x86_64 = .*|source_x86_64 = https://d.myani.org/v${NEW_PKGVER_SED}/ani-${NEW_PKGVER_SED}-linux-x86_64.appimage|" .SRCINFO
+          sed -i -E "s|^source_x86_64 = .*|source_x86_64 = ${DOWNLOAD_URL}|" .SRCINFO
           sed -i -E "s|^sha512sums_x86_64 = .*|sha512sums_x86_64 = ${SHA512}|" .SRCINFO
 
       - name: Commit updated PKGBUILD to repository
