@@ -42,6 +42,12 @@ jobs:
       - name: Check if Update is Needed
         id: check_update
         run: |
+          # Use environment variable names set by previous steps
+          LATEST_TAG="$latest_tag"
+          CURRENT_PKGVER="$current_pkgver"
+
+          echo "Comparing latest_tag=$LATEST_TAG with current_pkgver=$CURRENT_PKGVER"
+
           if [ "$LATEST_TAG" = "$CURRENT_PKGVER" ]; then
             echo "No update required."
             echo "update_needed=false" >> $GITHUB_ENV
