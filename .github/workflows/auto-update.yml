@@ -2,7 +2,7 @@ name: Auto Update AUR Package
 
 on:
   schedule:
-    - cron: "0 16 * * *"
+    - cron: '0 16 * * *'
   workflow_dispatch:
 
 permissions:
@@ -12,122 +12,77 @@ jobs:
   update-aur:
     runs-on: ubuntu-latest
     env:
-      API_URL: "https://api.github.com/repos/open-ani/animeko/releases?per_page=100"
+      API_URL: 'https://api.github.com/repos/open-ani/animeko/releases?per_page=100'
 
     steps:
-      - name: Checkout AUR Repository
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get Latest Beta Release Version from Upstream
+      - name: Get latest beta release and asset
         id: get_release
         run: |
-          # Prefer prerelease beta tags, fallback to any beta tag if none are marked prerelease
-          RELEASES_JSON=$(curl -sS -H "Accept: application/vnd.github+json" "$API_URL")
-          BETA_TAG=$(echo "$RELEASES_JSON" | jq -r '[.[] | select(.prerelease == true and (.tag_name | test("beta"; "i")))] | .[0].tag_name // ""')
-          if [ -z "$BETA_TAG" ]; then
-            BETA_TAG=$(echo "$RELEASES_JSON" | jq -r '[.[] | select(.tag_name | test("beta"; "i"))] | .[0].tag_name // ""')
-          fi
-          if [ -z "$BETA_TAG" ]; then
-            echo "Failed to find beta tag from releases."
-            exit 1
-          fi
+          releases=$(curl -sS -H 'Accept: application/vnd.github+json' "$API_URL")
+          tag=$(echo "$releases" | jq -r '[.[] | select(.prerelease == true and (.tag_name|test("beta";"i")))] | .[0].tag_name // ""')
+          [ -z "$tag" ] && tag=$(echo "$releases" | jq -r '[.[] | select(.tag_name|test("beta";"i"))] | .[0].tag_name // ""')
+          [ -n "$tag" ] || { echo 'no beta tag'; exit 1; }
+          url=$(curl -sS -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/open-ani/animeko/releases/tags/$tag" | jq -r '.assets[] | select(.name|test("linux.*x86_64\\.appimage";"i")) | .browser_download_url' | head -n1)
+          [ -n "$url" ] || { echo 'no asset url'; exit 1; }
+          echo "latest_tag=$tag" >> $GITHUB_ENV
+          echo "latest_asset_url=$url" >> $GITHUB_ENV
 
-          RELEASE_INFO=$(curl -sS -H "Accept: application/vnd.github+json" "https://api.github.com/repos/open-ani/animeko/releases/tags/$BETA_TAG")
-          ASSET_URL=$(echo "$RELEASE_INFO" | jq -r '.assets | map(select(.name | test("linux.*x86_64\\.appimage"; "i"))) | .[0].browser_download_url // ""')
-          if [ -z "$ASSET_URL" ]; then
-            echo "Failed to find beta appimage asset URL for tag $BETA_TAG."
-            exit 1
-          fi
-
-          echo "Latest beta release tag: $BETA_TAG"
-          echo "Asset URL: $ASSET_URL"
-          echo "latest_tag=$BETA_TAG" >> $GITHUB_ENV
-          echo "latest_asset_url=$ASSET_URL" >> $GITHUB_ENV
-
-      - name: Extract Current pkgver from PKGBUILD
+      - name: Current pkgver
         id: get_pkgver
         run: |
-          CURRENT_PKGVER=$(grep -E '^pkgver=' PKGBUILD | head -n1 | sed -E 's/^pkgver=//; s/^"//; s/"$//; s/^\x27//; s/\x27$//')
-          CURRENT_PKGVER=${CURRENT_PKGVER:-}
-          if [ -z "$CURRENT_PKGVER" ]; then
-            echo "ERROR: cannot parse pkgver from PKGBUILD"
-            cat PKGBUILD | sed -n '1,20p'
-            exit 1
-          fi
-          echo "Current pkgver in PKGBUILD: $CURRENT_PKGVER"
-          echo "current_pkgver=$CURRENT_PKGVER" >> $GITHUB_ENV
+          current=$(grep -E '^pkgver=' PKGBUILD | head -n1 | sed -E 's/^pkgver=//; s/^"//; s/"$//; s/^\x27//; s/\x27$//')
+          [ -n "$current" ] || { echo 'cannot parse pkgver'; exit 1; }
+          echo "current_pkgver=$current" >> $GITHUB_ENV
 
-      - name: Check if Update is Needed
+      - name: Check update
         id: check_update
         run: |
-          LATEST_TAG="$latest_tag"
-          CURRENT_PKGVER="$current_pkgver"
-          LATEST_STRIPPED=${LATEST_TAG#v}
-
-          echo "Comparing latest_tag=$LATEST_STRIPPED with current_pkgver=$CURRENT_PKGVER"
-
-          if [ "$LATEST_STRIPPED" = "$CURRENT_PKGVER" ]; then
-            echo "No update required."
-            echo "update_needed=false" >> $GITHUB_ENV
-            echo "update_needed=false" >> $GITHUB_OUTPUT
+          latest=${latest_tag#v}
+          current=$current_pkgver
+          echo "latest=$latest current=$current"
+          if [ "$latest" = "$current" ]; then
+            echo 'update_needed=false' >> $GITHUB_ENV
+            echo 'update_needed=false' >> $GITHUB_OUTPUT
           else
-            echo "Update required: new version $LATEST_STRIPPED found (current: $CURRENT_PKGVER)"
-            echo "update_needed=true" >> $GITHUB_ENV
-            echo "update_needed=true" >> $GITHUB_OUTPUT
+            echo 'update_needed=true' >> $GITHUB_ENV
+            echo 'update_needed=true' >> $GITHUB_OUTPUT
           fi
 
-      - name: Update PKGBUILD and .SRCINFO if New Version Found
+      - name: Apply update
         if: steps.check_update.outputs.update_needed == 'true'
         run: |
-          NEW_VERSION="$LATEST_TAG"
-          NEW_PKGVER=${NEW_VERSION#v}
-          NEW_PKGVER_SED=$(echo "$NEW_PKGVER" | sed -E 's/(alpha|beta)/-\1/g; s/-{2,}/-/g')
-          DOWNLOAD_URL="$latest_asset_url"
-
-          echo "NEW_PKGVER=$NEW_PKGVER"
-          echo "NEW_PKGVER_SED=$NEW_PKGVER_SED"
-          echo "DOWNLOAD_URL=$DOWNLOAD_URL"
-
-          if [ -z "$NEW_PKGVER" ]; then
-            echo "ERROR: NEW_PKGVER was empty. latest_tag=$LATEST_TAG"
-            exit 1
-          fi
-          if [ -z "$DOWNLOAD_URL" ]; then
-            echo "No release asset URL available."
-            exit 1
-          fi
-
-          sed -i -E "s/^pkgver=.*/pkgver=\"${NEW_PKGVER}\"/" PKGBUILD
+          latest=${latest_tag#v}
+          url=$latest_asset_url
+          curl -I -fS "$url" > /dev/null
+          curl -fSL -o ani.appimage "$url"
+          sha=$(sha512sum ani.appimage | awk '{print $1}')
+          sed -i -E "s/^pkgver=.*/pkgver=\"$latest\"/" PKGBUILD
           sed -i -E "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
-          sed -i -E "s|^source_x86_64=.*|source_x86_64=(\"${DOWNLOAD_URL}\")|" PKGBUILD
-
-          curl -I -fS "$DOWNLOAD_URL" || { echo "Asset URL not found: $DOWNLOAD_URL"; exit 1; }
-          curl -fSL -o ani.appimage "$DOWNLOAD_URL"
-          SHA512=$(sha512sum ani.appimage | awk '{print $1}')
-          sed -i -E "s|^sha512sums_x86_64=.*|sha512sums_x86_64=('${SHA512}')|" PKGBUILD
-
-          sed -i -E "s/^pkgver = .*/pkgver = ${NEW_PKGVER}/" .SRCINFO
+          sed -i -E "s|^source_x86_64=.*|source_x86_64=(\"$url\")|" PKGBUILD
+          sed -i -E "s|^sha512sums_x86_64=.*|sha512sums_x86_64=('$sha')|" PKGBUILD
+          sed -i -E "s/^pkgver = .*/pkgver = $latest/" .SRCINFO
           sed -i -E "s/^pkgrel = .*/pkgrel = 1/" .SRCINFO
-          sed -i -E "s|^source_x86_64 = .*|source_x86_64 = ${DOWNLOAD_URL}|" .SRCINFO
-          sed -i -E "s|^sha512sums_x86_64 = .*|sha512sums_x86_64 = ${SHA512}|" .SRCINFO
+          sed -i -E "s|^source_x86_64 = .*|source_x86_64 = $url|" .SRCINFO
+          sed -i -E "s|^sha512sums_x86_64 = .*|sha512sums_x86_64 = $sha|" .SRCINFO
 
-      - name: Commit updated PKGBUILD to repository
+      - name: Commit and push
         if: steps.check_update.outputs.update_needed == 'true'
         run: |
           git config user.name 'PaloMiku'
           git config user.email 'palomiku@outlook.com'
           git add PKGBUILD .SRCINFO
           if ! git diff --cached --quiet; then
-            git commit -m "Update PKGBUILD to $LATEST_TAG"
+            git commit -m "Update PKGBUILD to $latest_tag"
             git push origin HEAD:${{ github.ref }}
-          else
-            echo "No changes to commit."
           fi
 
-      - name: Publish AUR package
+      - name: Publish AUR
         if: steps.check_update.outputs.update_needed == 'true'
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
         with:
@@ -136,5 +91,5 @@ jobs:
           commit_username: 'PaloMiku'
           commit_email: 'palomiku@outlook.com'
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: "Update to $LATEST_TAG"
+          commit_message: "Update to $latest_tag"
           ssh_keyscan_types: rsa,ecdsa,ed25519
