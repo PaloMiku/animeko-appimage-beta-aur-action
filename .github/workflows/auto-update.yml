@@ -21,9 +21,9 @@ jobs:
         id: get_release
         run: |
           # Prefer prerelease beta tags, fallback to any beta tag if none are marked prerelease
-          BETA_TAG=$(curl -sS -H "Accept: application/vnd.github+json" "$API_URL" | jq -r 'map(select(.prerelease == true and (.tag_name|test("beta";"i")))) | first?.tag_name // ""')
+          BETA_TAG=$(curl -sS -H "Accept: application/vnd.github+json" "$API_URL" | jq -r '[.[] | select(.prerelease == true and (.tag_name | test("beta"; "i")))] | .[0].tag_name // ""')
           if [ -z "$BETA_TAG" ]; then
-            BETA_TAG=$(curl -sS -H "Accept: application/vnd.github+json" "$API_URL" | jq -r 'map(select((.tag_name|test("beta";"i")))) | first?.tag_name // ""')
+            BETA_TAG=$(curl -sS -H "Accept: application/vnd.github+json" "$API_URL" | jq -r '[.[] | select(.tag_name | test("beta"; "i"))] | .[0].tag_name // ""')
           fi
           if [ -z "$BETA_TAG" ]; then
             echo "Failed to find beta tag from releases."
