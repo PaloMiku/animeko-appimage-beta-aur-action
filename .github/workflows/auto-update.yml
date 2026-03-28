@@ -58,7 +58,7 @@ jobs:
         if: steps.check_update.outputs.update_needed == 'true'
         run: |
           origin=${latest_tag#v}
-          latest=$(echo "$origin" | sed -E 's/\b(alpha|beta)\b//g; s/-/./g; s/\.\././g')
+          latest=$(echo "$origin" | sed -E 's/-?(alpha|beta)/\1/g; s/-/./g; s/\.\././g')
           url="https://d.myani.org/v${origin}/ani-${origin}-linux-x86_64.appimage"
 
           echo "origin=$origin"
@@ -79,14 +79,19 @@ jobs:
           sed -i -E "s|^source_x86_64 = .*|source_x86_64 = $url|" .SRCINFO
           sed -i -E "s|^sha512sums_x86_64 = .*|sha512sums_x86_64 = $sha|" .SRCINFO
 
+          echo '=== .SRCINFO after update ==='
+          sed -n '1,20p' .SRCINFO
+          echo '=== PKGBUILD after update ==='
+          sed -n '1,20p' PKGBUILD
       - name: Commit and push
         if: steps.check_update.outputs.update_needed == 'true'
         run: |
           git config user.name 'PaloMiku'
           git config user.email 'palomiku@outlook.com'
+          LATEST_TAG=${latest_tag:-unknown}
           git add PKGBUILD .SRCINFO
           if ! git diff --cached --quiet; then
-            git commit -m "Update PKGBUILD to $latest_tag"
+            git commit -m "Update PKGBUILD to ${LATEST_TAG}"
             git push origin HEAD:${{ github.ref }}
           fi
 
